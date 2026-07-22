@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const lat = parseCoord(searchParams.get("lat"));
   const lng = parseCoord(searchParams.get("lng"));
+  const pnu = searchParams.get("pnu");
   const forceDemo = searchParams.get("demo") === "1";
 
   if (lat == null || lng == null) {
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
   const key = getVWorldKey();
 
   if (forceDemo || !key) {
-    const data = buildDemoParcel(lat, lng);
+    const data = buildDemoParcel(lat, lng, pnu);
     const body: ParcelApiResponse = { ok: true, data };
     return NextResponse.json(body);
   }
@@ -48,8 +49,7 @@ export async function GET(request: NextRequest) {
     const message =
       error instanceof Error ? error.message : "필지 조회 중 오류가 발생했습니다.";
 
-    // 실연동 실패 시에도 서비스가 멈추지 않도록 데모 응답으로 폴백
-    const data = buildDemoParcel(lat, lng);
+    const data = buildDemoParcel(lat, lng, pnu);
     const body: ParcelApiResponse = {
       ok: true,
       data: {

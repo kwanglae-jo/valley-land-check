@@ -12,6 +12,20 @@ export type ParcelGeometry = {
   coordinates: unknown;
 };
 
+export type ParcelSummary = {
+  id: string;
+  pnu: string;
+  address: string | null;
+  lat: number;
+  lng: number;
+  geometry: ParcelGeometry;
+  jimok: string | null;
+  jimokCode: string | null;
+  ownershipLabel: string | null;
+  ownershipCode: string | null;
+  area: number | null;
+};
+
 export type ParcelResult = {
   lat: number;
   lng: number;
@@ -31,3 +45,7 @@ export type ParcelResult = {
 export type ParcelApiResponse =
   | { ok: true; data: ParcelResult }
   | { ok: false; error: string; hint?: string };
+
+export type ParcelsApiResponse =
+  | { ok: true; data: ParcelSummary[]; source: "live" | "demo" }
+  | { ok: false; error: string };

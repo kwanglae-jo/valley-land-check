@@ -1,9 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useState, useTransition } from "react";
 import { DEMO_CENTER } from "@/lib/demo-data";
-import type { ParcelApiResponse, ParcelResult } from "@/lib/types";
+import type {
+  ParcelApiResponse,
+  ParcelResult,
+  ParcelsApiResponse,
+  ParcelSummary,
+} from "@/lib/types";
 import ResultPanel from "./ResultPanel";
 
 const MapView = dynamic(() => import("./MapView"), {
@@ -18,49 +23,77 @@ export default function ValleyApp() {
     DEMO_CENTER.lat,
     DEMO_CENTER.lng,
   ]);
-  const [zoom, setZoom] = useState(14);
-  const [selected, setSelected] = useState<Selected | null>({
-    lat: DEMO_CENTER.lat,
-    lng: DEMO_CENTER.lng,
-  });
+  const [zoom, setZoom] = useState(16);
+  const [selected, setSelected] = useState<Selected | null>(null);
+  const [selectedPnu, setSelectedPnu] = useState<string | null>(null);
+  const [parcels, setParcels] = useState<ParcelSummary[]>([]);
   const [result, setResult] = useState<ParcelResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [gpsHint, setGpsHint] = useState<string | null>(null);
 
-  const fetchParcel = useCallback((lat: number, lng: number) => {
-    startTransition(async () => {
-      setError(null);
-      try {
-        const res = await fetch(`/api/parcel?lat=${lat}&lng=${lng}`);
-        const json = (await res.json()) as ParcelApiResponse;
-        if (!json.ok) {
+  const fetchParcelDetail = useCallback(
+    (lat: number, lng: number, pnu?: string) => {
+      startTransition(async () => {
+        setError(null);
+        try {
+          const query = new URLSearchParams({
+            lat: String(lat),
+            lng: String(lng),
+          });
+          if (pnu) query.set("pnu", pnu);
+          const res = await fetch(`/api/parcel?${query.toString()}`);
+          const json = (await res.json()) as ParcelApiResponse;
+          if (!json.ok) {
+            setResult(null);
+            setError(json.error);
+            return;
+          }
+          setResult(json.data);
+          setSelectedPnu(json.data.pnu);
+        } catch {
           setResult(null);
-          setError(json.error);
-          return;
+          setError("네트워크 오류로 필지를 불러오지 못했습니다.");
         }
-        setResult(json.data);
-      } catch {
-        setResult(null);
-        setError("네트워크 오류로 필지를 불러오지 못했습니다.");
-      }
-    });
-  }, []);
-
-  const selectPoint = useCallback(
-    (lat: number, lng: number, nextZoom = 16) => {
-      setSelected({ lat, lng });
-      setCenter([lat, lng]);
-      setZoom(nextZoom);
-      fetchParcel(lat, lng);
+      });
     },
-    [fetchParcel],
+    [],
+  );
+
+  const selectParcel = useCallback(
+    (parcel: ParcelSummary) => {
+      setSelected({ lat: parcel.lat, lng: parcel.lng });
+      setSelectedPnu(parcel.pnu);
+      setCenter([parcel.lat, parcel.lng]);
+      fetchParcelDetail(parcel.lat, parcel.lng, parcel.pnu);
+    },
+    [fetchParcelDetail],
+  );
+
+  const loadParcels = useCallback(
+    async (bounds: { west: number; south: number; east: number; north: number }) => {
+      try {
+        const query = new URLSearchParams({
+          west: String(bounds.west),
+          south: String(bounds.south),
+          east: String(bounds.east),
+          north: String(bounds.north),
+        });
+        const res = await fetch(`/api/parcels?${query.toString()}`);
+        const json = (await res.json()) as ParcelsApiResponse;
+        if (!json.ok) return;
+        setParcels(json.data);
+      } catch {
+        // 필지 칸이 없어도 앱은 계속 쓸 수 있게 조용히 무시
+      }
+    },
+    [],
   );
 
   const locateMe = useCallback(() => {
     if (!navigator.geolocation) {
-      setGpsHint("이 기기에서는 위치 기능을 지원하지 않습니다. 지도를 눌러 확인하세요.");
+      setGpsHint("이 기기에서는 위치 기능을 지원하지 않습니다. 필지를 눌러 확인하세요.");
       return;
     }
 
@@ -70,53 +103,40 @@ export default function ValleyApp() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setLocating(false);
-        selectPoint(pos.coords.latitude, pos.coords.longitude, 17);
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setSelected({ lat, lng });
+        setCenter([lat, lng]);
+        setZoom(17);
+        // 내 위치에 가장 가까운 필지를 고릅니다.
+        fetchParcelDetail(lat, lng);
+        setGpsHint("내 위치 기준으로 가장 가까운 필지를 확인했습니다. 다른 필지도 눌러보세요.");
       },
       () => {
         setLocating(false);
-        setGpsHint("위치 권한이 없거나 실패했습니다. 지도를 직접 눌러도 됩니다.");
+        setGpsHint("위치 권한이 없거나 실패했습니다. 화면에 보이는 필지를 눌러 주세요.");
       },
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
     );
-  }, [selectPoint]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function bootstrap() {
-      try {
-        const res = await fetch(
-          `/api/parcel?lat=${DEMO_CENTER.lat}&lng=${DEMO_CENTER.lng}`,
-        );
-        const json = (await res.json()) as ParcelApiResponse;
-        if (cancelled) return;
-        if (!json.ok) {
-          setError(json.error);
-          return;
-        }
-        setResult(json.data);
-      } catch {
-        if (!cancelled) {
-          setError("네트워크 오류로 필지를 불러오지 못했습니다.");
-        }
-      }
-    }
-
-    void bootstrap();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [fetchParcelDetail]);
 
   return (
     <div className="app-shell">
-      <div className="map-plane" aria-label="계곡 위치 지도">
+      <div className="map-plane" aria-label="계곡 필지 지도">
         <MapView
           center={center}
           zoom={zoom}
           selected={selected}
+          selectedPnu={selectedPnu}
+          parcels={parcels}
           result={result}
-          onSelect={(lat, lng) => selectPoint(lat, lng)}
+          onParcelSelect={selectParcel}
+          onBoundsChange={(bounds) => {
+            void loadParcels(bounds);
+          }}
+          onEmptyClick={() => {
+            setGpsHint("빈 곳이 아니라, 초록색 필지 칸을 눌러 주세요.");
+          }}
         />
         <div className="map-veil" aria-hidden />
       </div>
@@ -129,7 +149,7 @@ export default function ValleyApp() {
             <p className="brand-sub">지금 이 자리, 사유지일까?</p>
           </div>
         </div>
-        <p className="brand-hint">지도를 누르거나 내 위치로 바로 확인</p>
+        <p className="brand-hint">초록색 필지를 눌러 사유지·공공용지를 확인하세요</p>
       </header>
 
       <div className="action-dock">
@@ -144,7 +164,9 @@ export default function ValleyApp() {
         <button
           type="button"
           className="secondary-btn"
-          onClick={() => selected && fetchParcel(selected.lat, selected.lng)}
+          onClick={() =>
+            selected && fetchParcelDetail(selected.lat, selected.lng, selectedPnu ?? undefined)
+          }
           disabled={!selected || isPending}
         >
           다시 조회
@@ -157,7 +179,9 @@ export default function ValleyApp() {
         loading={isPending}
         error={error}
         result={result}
-        onRecheck={() => selected && fetchParcel(selected.lat, selected.lng)}
+        onRecheck={() =>
+          selected && fetchParcelDetail(selected.lat, selected.lng, selectedPnu ?? undefined)
+        }
         onClose={() => {
           setResult(null);
           setError(null);

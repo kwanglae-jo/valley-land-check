@@ -4,7 +4,7 @@ import {
   jimokName,
   ownershipName,
 } from "./ownership";
-import type { ParcelGeometry, ParcelResult } from "./types";
+import type { ParcelGeometry, ParcelResult, ParcelSummary } from "./types";
 
 const VWORLD_DATA_URL = "https://api.vworld.kr/req/data";
 
@@ -144,6 +144,83 @@ export async function fetchLandAttributeByPnu(
   }
 
   return null;
+}
+
+/** 화면 범위 안의 연속지적도 필지 목록 */
+export async function fetchParcelsByBbox(
+  key: string,
+  west: number,
+  south: number,
+  east: number,
+  north: number,
+): Promise<ParcelSummary[]> {
+  const geomFilter = `BOX(${west},${south},${east},${north})`;
+  const features = await fetchVWorldFeatures({
+    service: "data",
+    request: "GetFeature",
+    data: "LP_PA_CBND_BUBUN",
+    key,
+    format: "json",
+    size: "80",
+    geometry: "true",
+    attribute: "true",
+    crs: "EPSG:4326",
+    geomFilter,
+  });
+
+  return features.flatMap((feature, index) => {
+    const props = feature.properties ?? {};
+    const pnu = pick(props, ["pnu", "PNU", "pnu_cd", "PNU_CD"]);
+    if (!pnu || !feature.geometry) return [];
+
+    const address = pick(props, ["addr", "ADDRESS", "jibun", "JIBUN", "addr_kor"]);
+    const center = estimateCenter(feature.geometry) ?? {
+      lat: (south + north) / 2,
+      lng: (west + east) / 2,
+    };
+
+    return [
+      {
+        id: `${pnu}-${index}`,
+        pnu,
+        address,
+        lat: center.lat,
+        lng: center.lng,
+        geometry: feature.geometry,
+        jimok: null,
+        jimokCode: null,
+        ownershipLabel: null,
+        ownershipCode: null,
+        area: asNumber(pick(props, ["lndpclAr", "LNDPCL_AR", "area", "AREA"])),
+      },
+    ];
+  });
+}
+
+function estimateCenter(geometry: ParcelGeometry): { lat: number; lng: number } | null {
+  try {
+    const coords = geometry.coordinates as number[][][] | number[][][][];
+    const ring =
+      geometry.type === "MultiPolygon"
+        ? (coords as number[][][][])[0]?.[0]
+        : (coords as number[][][])[0];
+    if (!ring?.length) return null;
+    let sumLat = 0;
+    let sumLng = 0;
+    let count = 0;
+    for (const point of ring) {
+      const lng = point[0];
+      const lat = point[1];
+      if (typeof lat !== "number" || typeof lng !== "number") continue;
+      sumLat += lat;
+      sumLng += lng;
+      count += 1;
+    }
+    if (!count) return null;
+    return { lat: sumLat / count, lng: sumLng / count };
+  } catch {
+    return null;
+  }
 }
 
 export async function lookupParcelLive(

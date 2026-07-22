@@ -29,7 +29,7 @@ export default function ResultPanel({
     <aside className={`result-panel ${result ? kindClass(result.verdict.kind) : ""}`} aria-live="polite">
       <div className="result-panel__handle" aria-hidden />
       <div className="result-panel__top">
-        <p className="result-panel__eyebrow">필지 확인 결과</p>
+        <p className="result-panel__eyebrow">선택한 필지 결과</p>
         <button type="button" className="ghost-btn" onClick={onClose} aria-label="닫기">
           닫기
         </button>

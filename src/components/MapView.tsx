@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import {
   GeoJSON,
   MapContainer,
@@ -10,7 +10,7 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
-import type { ParcelGeometry, ParcelResult } from "@/lib/types";
+import type { ParcelResult, ParcelSummary } from "@/lib/types";
 import "leaflet/dist/leaflet.css";
 
 const markerIcon = L.divIcon({
@@ -36,10 +36,39 @@ function MapController({
   return null;
 }
 
-function ClickHandler({ onSelect }: { onSelect: (lat: number, lng: number) => void }) {
+function BoundsWatcher({
+  onBounds,
+}: {
+  onBounds: (bounds: { west: number; south: number; east: number; north: number }) => void;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    const publish = () => {
+      const b = map.getBounds();
+      onBounds({
+        west: b.getWest(),
+        south: b.getSouth(),
+        east: b.getEast(),
+        north: b.getNorth(),
+      });
+    };
+    publish();
+    map.on("moveend", publish);
+    map.on("zoomend", publish);
+    return () => {
+      map.off("moveend", publish);
+      map.off("zoomend", publish);
+    };
+  }, [map, onBounds]);
+
+  return null;
+}
+
+function EmptyClickHint({ onEmptyClick }: { onEmptyClick: () => void }) {
   useMapEvents({
-    click(e) {
-      onSelect(e.latlng.lat, e.latlng.lng);
+    click() {
+      onEmptyClick();
     },
   });
   return null;
@@ -55,18 +84,44 @@ type Props = {
   center: [number, number];
   zoom: number;
   selected: { lat: number; lng: number } | null;
+  selectedPnu: string | null;
+  parcels: ParcelSummary[];
   result: ParcelResult | null;
-  onSelect: (lat: number, lng: number) => void;
+  onParcelSelect: (parcel: ParcelSummary) => void;
+  onBoundsChange: (bounds: {
+    west: number;
+    south: number;
+    east: number;
+    north: number;
+  }) => void;
+  onEmptyClick: () => void;
 };
 
 export default function MapView({
   center,
   zoom,
   selected,
+  selectedPnu,
+  parcels,
   result,
-  onSelect,
+  onParcelSelect,
+  onBoundsChange,
+  onEmptyClick,
 }: Props) {
-  const geometry = result?.geometry as ParcelGeometry | null;
+  const collection = useMemo(
+    () => ({
+      type: "FeatureCollection" as const,
+      features: parcels.map((parcel) => ({
+        type: "Feature" as const,
+        properties: {
+          pnu: parcel.pnu,
+          address: parcel.address,
+        },
+        geometry: parcel.geometry,
+      })),
+    }),
+    [parcels],
+  );
 
   return (
     <MapContainer
@@ -81,26 +136,43 @@ export default function MapView({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
       />
       <MapController center={center} zoom={zoom} />
-      <ClickHandler onSelect={onSelect} />
-      {selected && <Marker position={[selected.lat, selected.lng]} icon={markerIcon} />}
-      {geometry && (
-        <GeoJSON
-          key={`${result?.pnu ?? "g"}-${result?.fetchedAt ?? ""}`}
-          data={
-            {
-              type: "Feature",
-              properties: {},
-              geometry,
-            } as unknown as GeoJSON.GeoJsonObject
+      <BoundsWatcher onBounds={onBoundsChange} />
+      <EmptyClickHint onEmptyClick={onEmptyClick} />
+
+      <GeoJSON
+        key={`parcels-${parcels.map((p) => p.pnu).join(",")}`}
+        data={collection as unknown as GeoJSON.GeoJsonObject}
+        style={(feature) => {
+          const pnu = feature?.properties?.pnu as string | undefined;
+          const active = Boolean(pnu && pnu === selectedPnu);
+          if (active && result) {
+            return {
+              color: verdictColor(result.verdict.kind),
+              weight: 3,
+              fillColor: verdictColor(result.verdict.kind),
+              fillOpacity: 0.4,
+            };
           }
-          style={() => ({
-            color: verdictColor(result?.verdict.kind ?? "unknown"),
-            weight: 2,
-            fillColor: verdictColor(result?.verdict.kind ?? "unknown"),
-            fillOpacity: 0.28,
-          })}
-        />
-      )}
+          return {
+            color: active ? "#174833" : "#2f6b52",
+            weight: active ? 3 : 1.5,
+            fillColor: active ? "#2a7456" : "#7fb59a",
+            fillOpacity: active ? 0.35 : 0.18,
+          };
+        }}
+        onEachFeature={(feature, layer) => {
+          const pnu = feature.properties?.pnu as string | undefined;
+          layer.on({
+            click: (event) => {
+              L.DomEvent.stopPropagation(event);
+              const parcel = parcels.find((p) => p.pnu === pnu);
+              if (parcel) onParcelSelect(parcel);
+            },
+          });
+        }}
+      />
+
+      {selected && <Marker position={[selected.lat, selected.lng]} icon={markerIcon} />}
     </MapContainer>
   );
 }
