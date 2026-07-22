@@ -8,15 +8,17 @@ import type { ParcelGeometry, ParcelResult, ParcelSummary } from "./types";
 
 /**
  * 브이월드 연동 방식은 k-skill(NomaDamas/k-skill)의 VWorld BYOK 패턴을 참고합니다.
- * - 호스트: https://api.vworld.kr
+ * - 호스트: api.vworld.kr (클라우드 환경에서는 https 핸드셰이크 실패가 있어 http를 우선 사용)
  * - 키는 서버 환경변수에만 두고 브라우저에 노출하지 않음
  * - domain은 키 발급 시 등록한 서비스 도메인과 맞춰야 함
  *
  * k-skill proxy는 검색(/req/search)·공동주택가격만 중계합니다.
  * 연속지적도·소유구분은 Data API(/req/data)와 WFS(/req/wfs)를 직접 호출합니다.
  */
-const VWORLD_DATA_URL = "https://api.vworld.kr/req/data";
-const VWORLD_WFS_URL = "https://api.vworld.kr/req/wfs";
+const VWORLD_HOSTS = [
+  "http://api.vworld.kr",
+  "https://api.vworld.kr",
+] as const;
 
 type VWorldFeature = {
   type?: string;
@@ -63,21 +65,46 @@ function withDomain(params: Record<string, string>): Record<string, string> {
   return params;
 }
 
-async function fetchVWorldFeatures(params: Record<string, string>): Promise<VWorldFeature[]> {
-  const url = new URL(VWORLD_DATA_URL);
-  Object.entries(withDomain(params)).forEach(([k, v]) => url.searchParams.set(k, v));
+async function fetchJsonFromVWorld(
+  path: "/req/data" | "/req/wfs" | "/req/search",
+  params: Record<string, string>,
+): Promise<unknown> {
+  const query = withDomain(params);
+  let lastError: Error | null = null;
 
-  const response = await fetch(url.toString(), {
-    cache: "no-store",
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(15000),
-  });
-
-  if (!response.ok) {
-    throw new Error(`VWorld Data API 오류 (${response.status})`);
+  for (const host of VWORLD_HOSTS) {
+    const url = new URL(path, `${host}/`);
+    Object.entries(query).forEach(([k, v]) => url.searchParams.set(k, v));
+    try {
+      const response = await fetch(url.toString(), {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(15000),
+        redirect: "follow",
+      });
+      if (!response.ok) {
+        lastError = new Error(`VWorld HTTP ${response.status} @ ${host}`);
+        continue;
+      }
+      const text = await response.text();
+      if (!text.trim()) {
+        lastError = new Error(`VWorld empty body @ ${host}`);
+        continue;
+      }
+      return JSON.parse(text) as unknown;
+    } catch (error) {
+      lastError =
+        error instanceof Error
+          ? new Error(`${error.message} @ ${host}`)
+          : new Error(`VWorld fetch failed @ ${host}`);
+    }
   }
 
-  const json = (await response.json()) as {
+  throw lastError ?? new Error("VWorld 요청 실패");
+}
+
+async function fetchVWorldFeatures(params: Record<string, string>): Promise<VWorldFeature[]> {
+  const json = (await fetchJsonFromVWorld("/req/data", params)) as {
     response?: {
       status?: string;
       result?: { featureCollection?: VWorldFeatureCollection };
@@ -135,16 +162,7 @@ async function fetchLandInfoByPointOrPnu(
 
   for (const params of attempts) {
     try {
-      const url = new URL(VWORLD_WFS_URL);
-      Object.entries(withDomain(params)).forEach(([k, v]) => url.searchParams.set(k, v));
-      const response = await fetch(url.toString(), {
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!response.ok) continue;
-
-      const json = (await response.json()) as {
+      const json = (await fetchJsonFromVWorld("/req/wfs", params)) as {
         features?: VWorldFeature[];
         totalFeatures?: number;
       };
