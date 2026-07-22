@@ -6,7 +6,17 @@ import {
 } from "./ownership";
 import type { ParcelGeometry, ParcelResult, ParcelSummary } from "./types";
 
+/**
+ * 브이월드 연동 방식은 k-skill(NomaDamas/k-skill)의 VWorld BYOK 패턴을 참고합니다.
+ * - 호스트: https://api.vworld.kr
+ * - 키는 서버 환경변수에만 두고 브라우저에 노출하지 않음
+ * - domain은 키 발급 시 등록한 서비스 도메인과 맞춰야 함
+ *
+ * k-skill proxy는 검색(/req/search)·공동주택가격만 중계합니다.
+ * 연속지적도·소유구분은 Data API(/req/data)와 WFS(/req/wfs)를 직접 호출합니다.
+ */
 const VWORLD_DATA_URL = "https://api.vworld.kr/req/data";
+const VWORLD_WFS_URL = "https://api.vworld.kr/req/wfs";
 
 type VWorldFeature = {
   type?: string;
@@ -37,7 +47,6 @@ function pick(props: Record<string, unknown>, keys: string[]): string | null {
     const value = asString(props[key]);
     if (value) return value;
   }
-  // 대소문자 무시 매칭
   const lowerMap = new Map(
     Object.entries(props).map(([k, v]) => [k.toLowerCase(), v]),
   );
@@ -48,17 +57,24 @@ function pick(props: Record<string, unknown>, keys: string[]): string | null {
   return null;
 }
 
+function withDomain(params: Record<string, string>): Record<string, string> {
+  const domain = getVWorldDomain();
+  if (domain) return { ...params, domain };
+  return params;
+}
+
 async function fetchVWorldFeatures(params: Record<string, string>): Promise<VWorldFeature[]> {
   const url = new URL(VWORLD_DATA_URL);
-  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  Object.entries(withDomain(params)).forEach(([k, v]) => url.searchParams.set(k, v));
 
   const response = await fetch(url.toString(), {
-    next: { revalidate: 0 },
+    cache: "no-store",
     headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!response.ok) {
-    throw new Error(`VWorld 응답 오류 (${response.status})`);
+    throw new Error(`VWorld Data API 오류 (${response.status})`);
   }
 
   const json = (await response.json()) as {
@@ -78,43 +94,113 @@ async function fetchVWorldFeatures(params: Record<string, string>): Promise<VWor
   return json.response?.result?.featureCollection?.features ?? [];
 }
 
+/**
+ * 토지정보 기본도(WFS) — 지목·면적·소유구분명(owner_nm) 포함
+ * 참고: lt_c_landinfobasemap
+ */
+async function fetchLandInfoByPointOrPnu(
+  key: string,
+  lat: number,
+  lng: number,
+  pnu?: string | null,
+): Promise<Record<string, unknown> | null> {
+  const pad = 0.00012;
+  const attempts: Record<string, string>[] = [];
+
+  if (pnu) {
+    attempts.push({
+      key,
+      service: "WFS",
+      version: "2.0.0",
+      request: "GetFeature",
+      typeName: "lt_c_landinfobasemap",
+      output: "application/json",
+      srsName: "EPSG:4326",
+      maxFeatures: "5",
+      pnu,
+    });
+  }
+
+  attempts.push({
+    key,
+    service: "WFS",
+    version: "2.0.0",
+    request: "GetFeature",
+    typeName: "lt_c_landinfobasemap",
+    output: "application/json",
+    srsName: "EPSG:4326",
+    maxFeatures: "5",
+    bbox: `${lng - pad},${lat - pad},${lng + pad},${lat + pad},EPSG:4326`,
+  });
+
+  for (const params of attempts) {
+    try {
+      const url = new URL(VWORLD_WFS_URL);
+      Object.entries(withDomain(params)).forEach(([k, v]) => url.searchParams.set(k, v));
+      const response = await fetch(url.toString(), {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) continue;
+
+      const json = (await response.json()) as {
+        features?: VWorldFeature[];
+        totalFeatures?: number;
+      };
+      const feature = json.features?.[0];
+      if (feature?.properties && Object.keys(feature.properties).length > 0) {
+        return feature.properties;
+      }
+    } catch {
+      // 다음 시도
+    }
+  }
+
+  return null;
+}
+
 /** 좌표 주변 연속지적도 필지 조회 */
 export async function fetchCadastralByPoint(
   key: string,
   lat: number,
   lng: number,
 ): Promise<VWorldFeature | null> {
-  // 약 40m 버퍼의 작은 bbox로 해당 위치 필지를 찾습니다.
-  const pad = 0.00018;
-  const geomFilter = `BOX(${lng - pad},${lat - pad},${lng + pad},${lat + pad})`;
+  const filters = [
+    `POINT(${lng} ${lat})`,
+    (() => {
+      const pad = 0.00018;
+      return `BOX(${lng - pad},${lat - pad},${lng + pad},${lat + pad})`;
+    })(),
+  ];
 
-  const features = await fetchVWorldFeatures({
-    service: "data",
-    request: "GetFeature",
-    data: "LP_PA_CBND_BUBUN",
-    key,
-    format: "json",
-    size: "10",
-    geometry: "true",
-    attribute: "true",
-    crs: "EPSG:4326",
-    geomFilter,
-  });
+  for (const geomFilter of filters) {
+    const features = await fetchVWorldFeatures({
+      service: "data",
+      request: "GetFeature",
+      data: "LP_PA_CBND_BUBUN",
+      key,
+      format: "json",
+      size: "10",
+      geometry: "true",
+      attribute: "true",
+      crs: "EPSG:4326",
+      geomFilter,
+    });
+    if (features.length) return features[0] ?? null;
+  }
 
-  if (!features.length) return null;
-
-  // 포인트에 가장 가까운 중심의 피처를 우선 선택
-  return features[0] ?? null;
+  return null;
 }
 
-/** 토지임야(속성) 정보 조회 — PNU 기준 */
+/** 토지임야/속성 정보 조회 — PNU 기준 Data API */
 export async function fetchLandAttributeByPnu(
   key: string,
   pnu: string,
 ): Promise<Record<string, unknown> | null> {
-  // 브이월드 토지임야 관련 데이터셋 ID 후보를 순차 시도
   const datasetCandidates = [
     "LT_C_LHLDINFO",
+    "LT_C_LANDINFO",
     "LP_PA_CBND_BUBUN",
     "LT_C_ADEMD_INFO",
   ];
@@ -173,7 +259,9 @@ export async function fetchParcelsByBbox(
     const pnu = pick(props, ["pnu", "PNU", "pnu_cd", "PNU_CD"]);
     if (!pnu || !feature.geometry) return [];
 
-    const address = pick(props, ["addr", "ADDRESS", "jibun", "JIBUN", "addr_kor"]);
+    const address =
+      pick(props, ["addr", "ADDRESS", "jibun", "JIBUN", "addr_kor"]) ??
+      buildAddressFromParts(props);
     const center = estimateCenter(feature.geometry) ?? {
       lat: (south + north) / 2,
       lng: (west + east) / 2,
@@ -187,14 +275,27 @@ export async function fetchParcelsByBbox(
         lat: center.lat,
         lng: center.lng,
         geometry: feature.geometry,
-        jimok: null,
+        jimok: pick(props, ["jimok", "JIMOK", "lndcgrNm"]),
         jimokCode: null,
-        ownershipLabel: null,
+        ownershipLabel: pick(props, ["owner_nm", "ownerNm", "OWN_NM", "소유구분"]),
         ownershipCode: null,
-        area: asNumber(pick(props, ["lndpclAr", "LNDPCL_AR", "area", "AREA"])),
+        area: asNumber(
+          pick(props, ["lndpclAr", "LNDPCL_AR", "area", "AREA", "parea"]),
+        ),
       },
     ];
   });
+}
+
+function buildAddressFromParts(props: Record<string, unknown>): string | null {
+  const parts = [
+    pick(props, ["sido_nm", "sidoNm"]),
+    pick(props, ["sgg_nm", "sggNm"]),
+    pick(props, ["emd_nm", "emdNm"]),
+    pick(props, ["ri_nm", "riNm"]),
+    pick(props, ["jibun", "JIBUN"]),
+  ].filter(Boolean);
+  return parts.length ? parts.join(" ") : null;
 }
 
 function estimateCenter(geometry: ParcelGeometry): { lat: number; lng: number } | null {
@@ -223,6 +324,47 @@ function estimateCenter(geometry: ParcelGeometry): { lat: number; lng: number } 
   }
 }
 
+function extractOwnership(merged: Record<string, unknown>) {
+  const ownershipCode = pick(merged, [
+    "posesnSeCode",
+    "POSESN_SE_CD",
+    "ownerSe",
+    "OWN_GBN",
+    "own_gbn",
+    "소유구분코드",
+  ]);
+  const ownershipLabel = ownershipName(
+    ownershipCode,
+    pick(merged, [
+      "owner_nm",
+      "ownerNm",
+      "OWN_NM",
+      "posesnSe",
+      "POSESN_SE",
+      "ownerSeNm",
+      "OWN_GBN_NM",
+      "소유구분",
+      "소유구분명",
+    ]),
+  );
+  return { ownershipCode, ownershipLabel };
+}
+
+function extractJimok(merged: Record<string, unknown>) {
+  const jimokCode = pick(merged, [
+    "lndcgrCode",
+    "LNDCGR_CD",
+    "jimok",
+    "JIMOK_CD",
+    "lndcgr_cd",
+  ]);
+  // jimok 필드가 이미 한글 지목인 경우도 있음
+  const rawJimok = pick(merged, ["lndcgrNm", "JIMOK", "jimokNm", "지목", "lndcgr_nm", "jimok"]);
+  const looksLikeCode = Boolean(rawJimok && /^\d{1,2}$/.test(rawJimok));
+  const jimokLabel = jimokName(jimokCode, looksLikeCode ? null : rawJimok);
+  return { jimokCode, jimokLabel };
+}
+
 export async function lookupParcelLive(
   key: string,
   lat: number,
@@ -235,51 +377,26 @@ export async function lookupParcelLive(
 
   const props = cadastral.properties;
   const pnu = pick(props, ["pnu", "PNU", "pnu_cd", "PNU_CD"]);
-  const address = pick(props, ["addr", "ADDRESS", "jibun", "JIBUN", "addr_kor"]);
+  const address =
+    pick(props, ["addr", "ADDRESS", "jibun", "JIBUN", "addr_kor"]) ??
+    buildAddressFromParts(props);
 
-  let landProps: Record<string, unknown> | null = null;
-  if (pnu) {
-    landProps = await fetchLandAttributeByPnu(key, pnu);
-  }
-
-  const merged = { ...props, ...(landProps ?? {}) };
-
-  const jimokCode = pick(merged, [
-    "lndcgrCode",
-    "LNDCGR_CD",
-    "jimok",
-    "JIMOK_CD",
-    "lndcgr_cd",
+  const [landProps, wfsProps] = await Promise.all([
+    pnu ? fetchLandAttributeByPnu(key, pnu) : Promise.resolve(null),
+    fetchLandInfoByPointOrPnu(key, lat, lng, pnu),
   ]);
-  const jimokLabel = jimokName(
-    jimokCode,
-    pick(merged, ["lndcgrNm", "JIMOK", "jimokNm", "지목", "lndcgr_nm"]),
-  );
 
-  const ownershipCode = pick(merged, [
-    "posesnSeCode",
-    "POSESN_SE_CD",
-    "ownerSe",
-    "OWN_GBN",
-    "own_gbn",
-    "소유구분코드",
-  ]);
-  const ownershipLabel = ownershipName(
-    ownershipCode,
-    pick(merged, [
-      "posesnSe",
-      "POSESN_SE",
-      "ownerSeNm",
-      "OWN_GBN_NM",
-      "소유구분",
-      "소유구분명",
-    ]),
-  );
+  const merged = {
+    ...props,
+    ...(landProps ?? {}),
+    ...(wfsProps ?? {}),
+  };
 
+  const { jimokCode, jimokLabel } = extractJimok(merged);
+  const { ownershipCode, ownershipLabel } = extractOwnership(merged);
   const area = asNumber(
-    pick(merged, ["lndpclAr", "LNDPCL_AR", "area", "AREA", "parcel_area"]),
+    pick(merged, ["lndpclAr", "LNDPCL_AR", "area", "AREA", "parcel_area", "parea"]),
   );
-
   const kind = classifyOwnership(ownershipCode, ownershipLabel);
 
   return {
@@ -305,4 +422,16 @@ export function hasVWorldKey(): boolean {
 
 export function getVWorldKey(): string | null {
   return process.env.VWORLD_API_KEY?.trim() || null;
+}
+
+/** 브이월드 키 발급 시 등록한 도메인 (예: valley-land-check.vercel.app) */
+export function getVWorldDomain(): string | null {
+  const explicit = process.env.VWORLD_DOMAIN?.trim();
+  if (explicit) return explicit.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
+  const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim()
+    || process.env.VERCEL_URL?.trim();
+  if (vercel) return vercel.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
+  return null;
 }

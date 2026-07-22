@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import { DEMO_CENTER } from "@/lib/demo-data";
 import type {
   ParcelApiResponse,
@@ -32,6 +32,22 @@ export default function ValleyApp() {
   const [locating, setLocating] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [gpsHint, setGpsHint] = useState<string | null>(null);
+  const [liveMode, setLiveMode] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/status")
+      .then((res) => res.json())
+      .then((json: { live?: boolean }) => {
+        if (!cancelled) setLiveMode(Boolean(json.live));
+      })
+      .catch(() => {
+        if (!cancelled) setLiveMode(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const fetchParcelDetail = useCallback(
     (lat: number, lng: number, pnu?: string) => {
@@ -149,7 +165,11 @@ export default function ValleyApp() {
             <p className="brand-sub">지금 이 자리, 사유지일까?</p>
           </div>
         </div>
-        <p className="brand-hint">초록색 필지를 눌러 사유지·공공용지를 확인하세요</p>
+        <p className="brand-hint">
+          {liveMode
+            ? "초록색 필지를 눌러 실제 지적·소유구분을 확인하세요"
+            : "지금은 연습용(데모)입니다 · 초록색 필지를 눌러 확인"}
+        </p>
       </header>
 
       <div className="action-dock">
