@@ -442,7 +442,7 @@ export function getVWorldKey(): string | null {
   return process.env.VWORLD_API_KEY?.trim() || null;
 }
 
-/** 브이월드 키 발급 시 등록한 도메인 (예: valley-land-check.vercel.app) */
+/** 브이월드 키 발급 시 등록한 도메인 (예: valley-land-check.vercel.app / localhost) */
 export function getVWorldDomain(): string | null {
   const explicit = process.env.VWORLD_DOMAIN?.trim();
   if (explicit) return explicit.replace(/^https?:\/\//, "").replace(/\/$/, "");
@@ -451,5 +451,6 @@ export function getVWorldDomain(): string | null {
     || process.env.VERCEL_URL?.trim();
   if (vercel) return vercel.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
-  return null;
+  // 로컬 개발 기본값
+  return "localhost";
 }
