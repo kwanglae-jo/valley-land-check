@@ -2,40 +2,18 @@
 
 계곡·하천 방문 위치가 **사유지인지 공공용지인지** 바로 확인해 주는 웹서비스입니다.
 
-## 로컬 실행 (추천)
+## 로컬 실행 (제일 쉬운 방법)
 
-컴퓨터에서 이렇게 하면 됩니다.
+1. 브이월드 키 설정에 도메인 `localhost` 추가  
+2. 이 폴더에서 **`설치하고실행.bat`**(윈도우) 또는 **`설치하고실행.command`**(맥) 더블클릭  
+3. Node.js가 없으면 설치 페이지가 열립니다 → LTS 설치 후 다시 더블클릭  
+4. 잠시 뒤 브라우저에서 http://localhost:3000 확인
 
-### 0) 브이월드 키에 도메인 추가
-1. https://www.vworld.kr/dev/v4api.do 접속
-2. 발급한 키 설정에서 도메인에 `localhost` 추가
-3. (이미 있다면) `valley-land-check.vercel.app`도 유지
+ZIP으로 받았다면 압축을 푼 폴더 안에서 위 파일을 찾으면 됩니다.
 
-### 1) 프로젝트 받기
-```bash
-git clone https://github.com/kwanglae-jo/valley-land-check.git
-cd valley-land-check
-```
+---
 
-### 2) 키 넣기
-`.env.local` 파일을 만들고 아래처럼 적습니다.
-
-```env
-VWORLD_API_KEY=여기에_발급받은_키
-VWORLD_DOMAIN=localhost
-```
-
-### 3) 실행
-```bash
-npm install
-npm run dev
-```
-
-브라우저에서 http://localhost:3000 을 엽니다.
-
-정상이면 화면 안내가 **실제 지적·소유구분**으로 바뀌고,  
-결과의 데이터가 `실연동`으로 보입니다.  
-확인: http://localhost:3000/api/status
+### 직접 명령어로 할 때
 
 ## 지금 상태 (버셀)
 
