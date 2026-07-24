@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>계곡체크 (로컬)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      --moss: #1f5b45;
+      --moss-deep: #143d2f;
+      --warn: #c45c26;
+      --ok: #1f7a5c;
+      --mute: #6b776f;
+      --stone: #2b3330;
+      --panel: rgba(247, 251, 248, 0.96);
+      --shadow: 0 18px 50px rgba(20, 61, 47, 0.18);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: "Noto Sans KR", "Apple SD Gothic Neo", sans-serif; color: var(--stone); }
+    #map { position: absolute; inset: 0; background: #d7e4dc; }
+    .brand {
+      position: absolute; top: 0; left: 0; right: 0; z-index: 500;
+      padding: 1rem 1.1rem 0.4rem; pointer-events: none;
+      background: linear-gradient(180deg, rgba(20,61,47,.35), transparent);
+    }
+    .brand h1 {
+      margin: 0; font-family: "Nanum Myeongjo", Georgia, serif;
+      font-size: 1.85rem; color: #f7fbf8;
+      text-shadow: 0 2px 14px rgba(10,30,22,.45);
+    }
+    .brand p { margin: .25rem 0 0; color: rgba(247,251,248,.92); font-size: .9rem; text-shadow: 0 1px 8px rgba(10,30,22,.35); }
+    .dock {
+      position: absolute; left: 50%; bottom: max(12rem, 30vh); transform: translateX(-50%);
+      z-index: 520; width: min(420px, calc(100% - 1.4rem));
+      display: flex; gap: .55rem;
+    }
+    button {
+      border: 0; border-radius: .9rem; padding: .9rem 1rem; font-weight: 700; cursor: pointer;
+      font-family: inherit;
+    }
+    .primary { flex: 1; color: #f7fbf8; background: linear-gradient(160deg, #2a7456, #174833); box-shadow: var(--shadow); }
+    .secondary { color: var(--moss-deep); background: rgba(247,251,248,.94); box-shadow: var(--shadow); }
+    .panel {
+      position: absolute; left: 50%; bottom: .75rem; transform: translateX(-50%);
+      z-index: 530; width: min(520px, calc(100% - 1rem));
+      background: var(--panel); backdrop-filter: blur(10px);
+      border-radius: 1.2rem; box-shadow: var(--shadow); padding: .85rem 1rem 1rem;
+      border-top: 3px solid var(--mute);
+    }
+    .panel.private { border-top-color: var(--warn); }
+    .panel.public { border-top-color: var(--ok); }
+    .eyebrow { margin: 0; font-size: .78rem; color: var(--mute); font-weight: 700; }
+    .badge {
+      display: inline-block; margin: .45rem 0 0; padding: .28rem .55rem; border-radius: .45rem;
+      font-size: .8rem; font-weight: 700; background: #e5ebe7;
+    }
+    .badge.private { background: rgba(196,92,38,.14); color: #9a3f12; }
+    .badge.public { background: rgba(31,122,92,.14); color: #146347; }
+    .title { margin: .4rem 0 0; font-size: 1.02rem; font-weight: 700; line-height: 1.45; }
+    .caution {
+      margin: .55rem 0 0; padding: .65rem .75rem; border-radius: .75rem;
+      background: rgba(31,91,69,.06); font-size: .9rem; line-height: 1.45;
+    }
+    .meta { margin: .8rem 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; font-size: .9rem; }
+    .meta div span { display: block; font-size: .72rem; color: var(--mute); margin-bottom: .12rem; }
+    .meta div strong { font-weight: 600; word-break: break-all; }
+    .toast {
+      position: absolute; left: 50%; bottom: calc(max(12rem, 30vh) + 3.6rem); transform: translateX(-50%);
+      z-index: 540; width: min(420px, calc(100% - 1.4rem));
+      margin: 0; padding: .65rem .8rem; border-radius: .75rem;
+      background: rgba(20,61,47,.92); color: #f7fbf8; font-size: .84rem;
+    }
+    .note {
+      position: absolute; left: .8rem; right: .8rem; bottom: .15rem; z-index: 510;
+      margin: 0; font-size: .68rem; color: rgba(247,251,248,.85);
+      text-shadow: 0 1px 8px rgba(10,30,22,.45); pointer-events: none;
+    }
+    @media (min-width: 768px) {
+      .dock { left: 1.4rem; transform: none; bottom: 2rem; width: 280px; flex-direction: column; }
+      .panel { left: auto; right: 1.4rem; transform: none; width: min(380px, calc(100% - 2rem)); bottom: 1.4rem; }
+      .toast { left: 1.4rem; transform: none; width: 280px; bottom: 10.5rem; }
+      .note { left: auto; right: 1.4rem; bottom: auto; top: 1.3rem; width: min(340px, 36vw); text-align: right; }
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <header class="brand">
+    <h1>계곡체크</h1>
+    <p>로컬 연습용 · 초록 필지를 눌러 확인하세요</p>
+  </header>
+  <div class="dock">
+    <button class="primary" id="btnLocate" type="button">내 위치로 확인</button>
+    <button class="secondary" id="btnReset" type="button">처음 위치로</button>
+  </div>
+  <p class="toast" id="toast" hidden></p>
+  <aside class="panel" id="panel" hidden></aside>
+  <p class="note">이 파일은 로컬 연습용입니다. 실제 지적 데이터가 아닙니다.</p>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const CENTER = [37.8312, 127.5104];
+    const CELL_LAT = 0.00055;
+    const CELL_LNG = 0.0007;
+
+    const SEEDS = [
+      { row: 0, col: 0, jimok: "임야", ownership: "개인", label: "임야 A", area: 1240 },
+      { row: 0, col: 1, jimok: "임야", ownership: "개인", label: "임야 B", area: 980 },
+      { row: 0, col: 2, jimok: "하천", ownership: "국유", label: "하천", area: 830 },
+      { row: 1, col: 0, jimok: "전", ownership: "개인", label: "밭", area: 720 },
+      { row: 1, col: 1, jimok: "잡종지", ownership: "공유", label: "잡종지", area: 560 },
+      { row: 1, col: 2, jimok: "임야", ownership: "법인", label: "임야 C", area: 1100 },
+      { row: 2, col: 0, jimok: "도로", ownership: "시유", label: "도로", area: 410 },
+      { row: 2, col: 1, jimok: "구거", ownership: "국유", label: "구거", area: 390 },
+      { row: 2, col: 2, jimok: "임야", ownership: "개인", label: "임야 D", area: 1320 },
+      { row: -1, col: 0, jimok: "답", ownership: "개인", label: "논", area: 860 },
+      { row: -1, col: 1, jimok: "유지", ownership: "공유", label: "유지", area: 640 },
+      { row: 0, col: -1, jimok: "임야", ownership: "개인", label: "임야 E", area: 1010 },
+      { row: 1, col: -1, jimok: "목장용지", ownership: "법인", label: "목장", area: 1500 },
+      { row: 2, col: -1, jimok: "공원", ownership: "군유", label: "공원", area: 2100 },
+    ];
+
+    function classify(ownership) {
+      if (["국유", "공유", "도유", "시유", "군유", "구유", "공공"].some((k) => ownership.includes(k))) {
+        return "public";
+      }
+      if (["개인", "법인", "사유지"].some((k) => ownership.includes(k))) {
+        return "private";
+      }
+      return "unknown";
+    }
+
+    function verdict(kind, ownership, jimok) {
+      if (kind === "public") {
+        return {
+          label: "공공용지 가능성 높음",
+          summary: `소유구분: ${ownership} · 지목: ${jimok}. 일반적으로 공공 관리 토지로 분류됩니다.`,
+          caution: "최종 출입 가능 여부는 현장 안내와 관리청 확인이 필요합니다. 로컬 연습용 데이터입니다.",
+        };
+      }
+      if (kind === "private") {
+        return {
+          label: "사유지 가능성 높음",
+          summary: `소유구분: ${ownership} · 지목: ${jimok}. 무단 출입·취사는 분쟁 소지가 있습니다.`,
+          caution: "사유지로 보이면 출입 전 동의 여부를 확인하세요. 로컬 연습용 데이터입니다.",
+        };
+      }
+      return {
+        label: "판정 보류",
+        summary: `소유구분: ${ownership} · 지목: ${jimok}. 확정하기 어렵습니다.`,
+        caution: "불확실하면 출입을 자제해 주세요.",
+      };
+    }
+
+    function makeParcel(seed) {
+      const lat = CENTER[0] + seed.row * CELL_LAT;
+      const lng = CENTER[1] + seed.col * CELL_LNG;
+      const wobble = ((seed.row * 3 + seed.col * 7) % 5) * 0.00002;
+      const h = CELL_LAT * 0.42;
+      const w = CELL_LNG * 0.42;
+      const kind = classify(seed.ownership);
+      return {
+        ...seed,
+        lat,
+        lng,
+        kind,
+        address: `경기도 가평군 설악면 (${seed.label})`,
+        pnu: `4182025021${String(1000 + (seed.row + 5) * 10 + (seed.col + 5)).padStart(4, "0")}000`,
+        ring: [
+          [lat - h, lng - w + wobble],
+          [lat - h + wobble, lng + w],
+          [lat + h, lng + w - wobble],
+          [lat + h - wobble, lng - w],
+        ],
+      };
+    }
+
+    const parcels = SEEDS.map(makeParcel);
+    const map = L.map("map", { zoomControl: false }).setView(CENTER, 16);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap",
+    }).addTo(map);
+
+    const panel = document.getElementById("panel");
+    const toast = document.getElementById("toast");
+    let marker = null;
+    let selectedLayer = null;
+
+    function showToast(text) {
+      toast.hidden = false;
+      toast.textContent = text;
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => { toast.hidden = true; }, 3200);
+    }
+
+    function showResult(parcel) {
+      const v = verdict(parcel.kind, parcel.ownership, parcel.jimok);
+      panel.hidden = false;
+      panel.className = `panel ${parcel.kind === "private" ? "private" : parcel.kind === "public" ? "public" : ""}`;
+      panel.innerHTML = `
+        <p class="eyebrow">선택한 필지 결과 (로컬 연습용)</p>
+        <p class="badge ${parcel.kind}">${v.label}</p>
+        <p class="title">${v.summary}</p>
+        <p class="caution">${v.caution}</p>
+        <div class="meta">
+          <div><span>위치</span><strong>${parcel.address}</strong></div>
+          <div><span>지목</span><strong>${parcel.jimok}</strong></div>
+          <div><span>소유구분</span><strong>${parcel.ownership}</strong></div>
+          <div><span>면적</span><strong>${parcel.area.toLocaleString()} ㎡</strong></div>
+          <div><span>PNU</span><strong>${parcel.pnu}</strong></div>
+          <div><span>데이터</span><strong>로컬 연습용</strong></div>
+        </div>
+      `;
+    }
+
+    function selectParcel(parcel, layer) {
+      if (selectedLayer) {
+        selectedLayer.setStyle({ color: "#2f6b52", weight: 1.5, fillColor: "#7fb59a", fillOpacity: 0.18 });
+      }
+      selectedLayer = layer;
+      layer.setStyle({
+        color: parcel.kind === "private" ? "#c45c26" : parcel.kind === "public" ? "#1f7a5c" : "#174833",
+        weight: 3,
+        fillColor: parcel.kind === "private" ? "#c45c26" : parcel.kind === "public" ? "#1f7a5c" : "#2a7456",
+        fillOpacity: 0.4,
+      });
+      if (marker) map.removeLayer(marker);
+      marker = L.circleMarker([parcel.lat, parcel.lng], {
+        radius: 8, color: "#174833", weight: 3, fillColor: "#f7fbf8", fillOpacity: 1,
+      }).addTo(map);
+      map.panTo([parcel.lat, parcel.lng]);
+      showResult(parcel);
+    }
+
+    const layers = parcels.map((parcel) => {
+      const layer = L.polygon(parcel.ring, {
+        color: "#2f6b52", weight: 1.5, fillColor: "#7fb59a", fillOpacity: 0.18,
+      }).addTo(map);
+      layer.on("click", (e) => {
+        L.DomEvent.stopPropagation(e);
+        selectParcel(parcel, layer);
+      });
+      return { parcel, layer };
+    });
+
+    map.on("click", () => showToast("빈 곳이 아니라, 초록색 필지 칸을 눌러 주세요."));
+
+    document.getElementById("btnReset").onclick = () => {
+      map.setView(CENTER, 16);
+      selectParcel(layers[0].parcel, layers[0].layer);
+    };
+
+    document.getElementById("btnLocate").onclick = () => {
+      if (!navigator.geolocation) {
+        showToast("이 브라우저에서는 위치를 지원하지 않습니다. 필지를 눌러 주세요.");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          let best = layers[0];
+          let bestD = Infinity;
+          for (const item of layers) {
+            const d = (item.parcel.lat - latitude) ** 2 + (item.parcel.lng - longitude) ** 2;
+            if (d < bestD) { bestD = d; best = item; }
+          }
+          map.setView([latitude, longitude], 16);
+          selectParcel(best.parcel, best.layer);
+          showToast("내 위치 기준 가까운 연습용 필지를 골랐습니다.");
+        },
+        () => showToast("위치 권한이 없거나 실패했습니다. 필지를 눌러 주세요."),
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    };
+
+    // 첫 필지 미리 선택
+    selectParcel(layers[0].parcel, layers[0].layer);
+  </script>
+</body>
+</html>

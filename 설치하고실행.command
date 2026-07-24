@@ -19,8 +19,16 @@ echo "Node.js 버전: $(node -v)"
 echo ""
 
 if [ ! -f ".env.local" ]; then
-  cat > .env.local <<'EOF'
-VWORLD_API_KEY=49ABEC91-8E58-3145-88CF-EDA9E8F46B46
+  echo "브이월드 인증키를 붙여넣고 Enter 치세요."
+  echo "(채팅에서 받은 키 그대로 붙여넣기)"
+  read -r USER_KEY
+  if [ -z "$USER_KEY" ]; then
+    echo "키가 비어 있습니다. 다시 실행해 주세요."
+    read -r -p "엔터를 누르면 종료합니다..."
+    exit 1
+  fi
+  cat > .env.local <<EOF
+VWORLD_API_KEY=${USER_KEY}
 VWORLD_DOMAIN=localhost
 EOF
   echo ".env.local 생성 완료"
@@ -36,8 +44,9 @@ npm install || {
 
 echo ""
 echo "서버를 켭니다. 잠시 후 브라우저가 열려요."
+echo "주소: http://localhost:3000"
 echo "끄려면 이 창에서 Ctrl + C 를 누르세요."
 echo ""
 
-(sleep 5; open "http://localhost:3000" 2>/dev/null || true) &
+(sleep 6; open "http://localhost:3000" 2>/dev/null || true) &
 npm run dev
